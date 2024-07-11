@@ -22,8 +22,7 @@ set(srcs
   Passes/ESICleanMetadata.cpp
   Passes/ESIBuildManifest.cpp
   Passes/ESIAppIDHier.cpp
-
-  APIUtilities.cpp
+  Passes/ESIVerifyConnections.cpp
 )
 
 set(ESI_LinkLibs

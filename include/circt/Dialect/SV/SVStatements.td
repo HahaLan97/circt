@@ -268,8 +268,9 @@ def SyncReset: I32EnumAttrCase<"SyncReset", 1, "syncreset">;
 def AsyncReset: I32EnumAttrCase<"AsyncReset", 2, "asyncreset">;
 
 def ResetTypeAttr : I32EnumAttr<"ResetType", "reset type",
-                                   [NoReset, SyncReset, AsyncReset]>;
-
+                                   [NoReset, SyncReset, AsyncReset]> {
+  let cppNamespace = "::circt::sv";
+}
 
 def AlwaysFFOp : SVOp<"alwaysff", [SingleBlock, NoTerminator, NoRegionArguments,
                                    RecursiveMemoryEffects, RecursivelySpeculatable,
@@ -907,7 +908,8 @@ def FuncOp : SVOp<"func",
      [IsolatedFromAbove, Symbol, OpAsmOpInterface, ProceduralRegion,
       DeclareOpInterfaceMethods<HWModuleLike>,
       DeclareOpInterfaceMethods<PortList>,
-      FunctionOpInterface, HasParent<"mlir::ModuleOp">]> {
+      FunctionOpInterface, HasParent<"mlir::ModuleOp">, 
+      HWEmittableModuleLike]> {
   let summary = "A SystemVerilog function";
   let description = [{
     `sv.func` represents SystemVerilog function in IEEE 1800-2017 section 13.4

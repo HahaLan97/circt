@@ -55,8 +55,8 @@ firrtl.circuit "Intrinsics" {
     // CHECK-NEXT: hw.output [[CLK0]], [[CLK1]]
     %0 = firrtl.int.clock_gate %clk, %enable
     %1 = firrtl.int.clock_gate %clk, %enable, %testEnable
-    firrtl.strictconnect %gated_clk0, %0 : !firrtl.clock
-    firrtl.strictconnect %gated_clk1, %1 : !firrtl.clock
+    firrtl.matchingconnect %gated_clk0, %0 : !firrtl.clock
+    firrtl.matchingconnect %gated_clk1, %1 : !firrtl.clock
   }
 
   // CHECK-LABEL: hw.module @LTLAndVerif
@@ -107,9 +107,6 @@ firrtl.circuit "Intrinsics" {
     // CHECK-NEXT: [[K0:%.+]] = ltl.clock [[I0]], posedge [[CLK]] : !ltl.property
     %k0 = firrtl.int.ltl.clock %i0, %clk : (!firrtl.uint<1>, !firrtl.clock) -> !firrtl.uint<1>
 
-    // CHECK-NEXT: [[D2:%.+]] = ltl.disable [[K0]] if %b : !ltl.property
-    %d2 = firrtl.int.ltl.disable %k0, %b : (!firrtl.uint<1>, !firrtl.uint<1>) -> !firrtl.uint<1>
-
     // CHECK-NEXT: verif.assert %a : i1
     firrtl.int.verif.assert %a : !firrtl.uint<1>
     // CHECK-NEXT: verif.assert %a label "hello" : i1
@@ -147,27 +144,27 @@ firrtl.circuit "Intrinsics" {
     // !ltl.property
     // CHECK-NEXT: [[G]] = ltl.implication [[E]], [[F]] : !ltl.sequence, !ltl.property
     %4 = firrtl.int.ltl.implication %e, %f : (!firrtl.uint<1>, !firrtl.uint<1>) -> !firrtl.uint<1>
-    firrtl.strictconnect %g, %4 : !firrtl.uint<1>
+    firrtl.matchingconnect %g, %4 : !firrtl.uint<1>
 
     // inferred as !ltl.property
     // CHECK-NEXT: [[F]] = ltl.or %b, [[D:%.+]] : i1, !ltl.property
     %3 = firrtl.int.ltl.or %b, %d : (!firrtl.uint<1>, !firrtl.uint<1>) -> !firrtl.uint<1>
-    firrtl.strictconnect %f, %3 : !firrtl.uint<1>
+    firrtl.matchingconnect %f, %3 : !firrtl.uint<1>
 
     // inferred as !ltl.sequence
     // CHECK-NEXT: [[E]] = ltl.and %b, [[C:%.+]] : i1, !ltl.sequence
     %2 = firrtl.int.ltl.and %b, %c : (!firrtl.uint<1>, !firrtl.uint<1>) -> !firrtl.uint<1>
-    firrtl.strictconnect %e, %2 : !firrtl.uint<1>
+    firrtl.matchingconnect %e, %2 : !firrtl.uint<1>
 
     // !ltl.property
     // CHECK-NEXT: [[D]] = ltl.not %b : i1
     %1 = firrtl.int.ltl.not %b : (!firrtl.uint<1>) -> !firrtl.uint<1>
-    firrtl.strictconnect %d, %1 : !firrtl.uint<1>
+    firrtl.matchingconnect %d, %1 : !firrtl.uint<1>
 
     // !ltl.sequence
     // CHECK-NEXT: [[C]] = ltl.delay %a, 42 : i1
     %0 = firrtl.int.ltl.delay %a, 42 : (!firrtl.uint<1>) -> !firrtl.uint<1>
-    firrtl.strictconnect %c, %0 : !firrtl.uint<1>
+    firrtl.matchingconnect %c, %0 : !firrtl.uint<1>
   }
 
   // CHECK-LABEL: hw.module @HasBeenReset
@@ -184,8 +181,8 @@ firrtl.circuit "Intrinsics" {
     // CHECK-NEXT: hw.output [[TMP1]], [[TMP2]]
     %0 = firrtl.int.has_been_reset %clock, %reset1 : !firrtl.uint<1>
     %1 = firrtl.int.has_been_reset %clock, %reset2 : !firrtl.asyncreset
-    firrtl.strictconnect %hbr1, %0 : !firrtl.uint<1>
-    firrtl.strictconnect %hbr2, %1 : !firrtl.uint<1>
+    firrtl.matchingconnect %hbr1, %0 : !firrtl.uint<1>
+    firrtl.matchingconnect %hbr2, %1 : !firrtl.uint<1>
   }
 
   // CHECK-LABEL: hw.module @FPGAProbe
@@ -206,10 +203,10 @@ firrtl.circuit "Intrinsics" {
   ) {
     // CHECK: seq.clock_inv %clock_in
     %clock_inv_out = firrtl.int.clock_inv %clock_in
-    firrtl.strictconnect %clock_inv, %clock_inv_out : !firrtl.clock
+    firrtl.matchingconnect %clock_inv, %clock_inv_out : !firrtl.clock
 
     // CHECK: seq.clock_div %clock_in
     %clock_div_out = firrtl.int.clock_div %clock_in by 4
-    firrtl.strictconnect %clock_div, %clock_div_out : !firrtl.clock
+    firrtl.matchingconnect %clock_div, %clock_div_out : !firrtl.clock
   }
 }

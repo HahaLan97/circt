@@ -10,12 +10,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PassDetails.h"
 #include "circt/Dialect/FIRRTL/FIRRTLAnnotationHelper.h"
+#include "circt/Dialect/FIRRTL/FIRRTLAnnotations.h"
 #include "circt/Dialect/FIRRTL/FIRRTLDialect.h"
 #include "circt/Dialect/FIRRTL/FIRRTLTypes.h"
 #include "circt/Dialect/FIRRTL/FIRRTLUtils.h"
 #include "circt/Dialect/FIRRTL/OwningModuleCache.h"
+#include "circt/Dialect/FIRRTL/Passes.h"
 #include "circt/Dialect/HW/InnerSymbolNamespace.h"
 #include "circt/Dialect/OM/OMAttributes.h"
 #include "circt/Dialect/OM/OMOps.h"
@@ -23,11 +24,19 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Threading.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
+
+namespace circt {
+namespace firrtl {
+#define GEN_PASS_DEF_LOWERCLASSES
+#include "circt/Dialect/FIRRTL/Passes.h.inc"
+} // namespace firrtl
+} // namespace circt
 
 using namespace mlir;
 using namespace circt;
@@ -188,7 +197,8 @@ struct LoweringState {
   DenseMap<om::ClassLike, ClassLoweringState> classLoweringStateTable;
 };
 
-struct LowerClassesPass : public LowerClassesBase<LowerClassesPass> {
+struct LowerClassesPass
+    : public circt::firrtl::impl::LowerClassesBase<LowerClassesPass> {
   void runOnOperation() override;
 
 private:
@@ -234,12 +244,13 @@ struct PathTracker {
       PathInfoTable &pathInfoTable, const SymbolTable &symbolTable,
       const DenseMap<DistinctAttr, FModuleOp> &owningModules);
 
-  PathTracker(FModuleLike module, hw::InnerSymbolNamespace &moduleNamespace,
+  PathTracker(FModuleLike module,
+              hw::InnerSymbolNamespaceCollection &namespaces,
               InstanceGraph &instanceGraph, const SymbolTable &symbolTable,
               const DenseMap<DistinctAttr, FModuleOp> &owningModules)
-      : module(module), moduleNamespace(moduleNamespace),
-        instanceGraph(instanceGraph), symbolTable(symbolTable),
-        owningModules(owningModules) {}
+      : module(module), moduleNamespace(namespaces[module]),
+        namespaces(namespaces), instanceGraph(instanceGraph),
+        symbolTable(symbolTable), owningModules(owningModules) {}
 
 private:
   struct PathInfoTableEntry {
@@ -268,6 +279,7 @@ private:
 
   // Local data structures.
   hw::InnerSymbolNamespace &moduleNamespace;
+  hw::InnerSymbolNamespaceCollection &namespaces;
   DenseMap<std::pair<StringAttr, FModuleOp>, bool> needsAltBasePathCache;
 
   // Thread-unsafe global data structure. Don't mutate.
@@ -289,21 +301,16 @@ PathTracker::run(CircuitOp circuit, InstanceGraph &instanceGraph,
                  const SymbolTable &symbolTable,
                  const DenseMap<DistinctAttr, FModuleOp> &owningModules) {
   SmallVector<PathTracker> trackers;
-  // Prepare workers.
+
   for (auto *node : instanceGraph)
-    if (auto module = node->getModule<FModuleLike>())
-      trackers.emplace_back(module, namespaces[module], instanceGraph,
-                            symbolTable, owningModules);
-
-  if (failed(failableParallelForEach(
-          circuit.getContext(), trackers,
-          [](PathTracker &tracker) { return tracker.runOnModule(); })))
-    return failure();
-
-  // Update the pathInfoTable sequentially.
-  for (const auto &tracker : trackers)
-    if (failed(tracker.updatePathInfoTable(pathInfoTable, cache)))
-      return failure();
+    if (auto module = node->getModule<FModuleLike>()) {
+      PathTracker tracker(module, namespaces, instanceGraph, symbolTable,
+                          owningModules);
+      if (failed(tracker.runOnModule()))
+        return failure();
+      if (failed(tracker.updatePathInfoTable(pathInfoTable, cache)))
+        return failure();
+    }
 
   return success();
 }
@@ -370,14 +377,16 @@ PathTracker::getOrComputeNeedsAltBasePath(Location loc, StringAttr moduleName,
       break;
     }
     // If there is more than one instance of this module, then the path
-    // operation is ambiguous, which is an error.
+    // operation is ambiguous, which is a warning.  This should become an error
+    // once user code is properly enforcing single instantiation, but in
+    // practice this generates the same outputs as the original flow for now.
+    // See https://github.com/llvm/circt/issues/7128.
     if (!node->hasOneUse()) {
-      auto diag = mlir::emitError(loc)
+      auto diag = mlir::emitWarning(loc)
                   << "unable to uniquely resolve target due "
                      "to multiple instantiation";
       for (auto *use : node->uses())
         diag.attachNote(use->getInstance().getLoc()) << "instance here";
-      return diag;
     }
     node = (*node->usesBegin())->getParent();
   }
@@ -463,39 +472,71 @@ PathTracker::processPathTrackers(const AnnoTarget &target) {
 
     // Copy the middle part from the annotation's NLA.
     if (hierPathOp) {
-      // Copy the old path, dropping the module name.
+      // Get the original path.
       auto oldPath = hierPathOp.getNamepath().getValue();
-      llvm::append_range(path, llvm::reverse(oldPath.drop_back()));
 
-      // Set the moduleName based on the hierarchical path. If the
-      // owningModule is in the hierarichal path, set the moduleName to the
-      // owning module. Otherwise use the top of the hierarchical path.
-      bool pathContainsOwningModule =
-          llvm::any_of(oldPath, [&](auto pathFragment) {
-            return llvm::TypeSwitch<Attribute, bool>(pathFragment)
-                .Case([&](hw::InnerRefAttr innerRef) {
-                  return innerRef.getModule() ==
-                         owningModule.getModuleNameAttr();
-                })
-                .Case([&](FlatSymbolRefAttr symRef) {
-                  return symRef.getAttr() == owningModule.getModuleNameAttr();
-                })
-                .Default([](auto attr) { return false; });
-          });
+      // Set the moduleName and path based on the hierarchical path. If the
+      // owningModule is in the hierarichal path, start the hierarchical path
+      // there. Otherwise use the top of the hierarchical path.
+      bool pathContainsOwningModule = false;
+      size_t owningModuleIndex = 0;
+      for (auto [idx, pathFramgent] : llvm::enumerate(oldPath)) {
+        if (auto innerRef = dyn_cast<hw::InnerRefAttr>(pathFramgent)) {
+          if (innerRef.getModule() == owningModule.getModuleNameAttr()) {
+            pathContainsOwningModule = true;
+            owningModuleIndex = idx;
+          }
+        } else if (auto symRef = dyn_cast<FlatSymbolRefAttr>(pathFramgent)) {
+          if (symRef.getAttr() == owningModule.getModuleNameAttr()) {
+            pathContainsOwningModule = true;
+            owningModuleIndex = idx;
+          }
+        }
+      }
+
       if (pathContainsOwningModule) {
+        // Set the path root module name to the owning module.
         moduleName = owningModule.getModuleNameAttr();
+
+        // Copy the old path, dropping the module name and the prefix to the
+        // owning module.
+        llvm::append_range(path, llvm::reverse(oldPath.drop_back().drop_front(
+                                     owningModuleIndex)));
       } else {
+        // Set the path root module name to the start of the path.
         moduleName = cast<hw::InnerRefAttr>(oldPath.front()).getModule();
+
+        // Copy the old path, dropping the module name.
+        llvm::append_range(path, llvm::reverse(oldPath.drop_back()));
       }
     }
 
-    // Copy the leading part of the hierarchical path from the owning module
-    // to the start of the annotation's NLA.
+    // Check if we need an alternative base path.
     auto needsAltBasePath =
         getOrComputeNeedsAltBasePath(op->getLoc(), moduleName, owningModule);
     if (failed(needsAltBasePath)) {
       error = true;
       return false;
+    }
+
+    // Copy the leading part of the hierarchical path from the owning module
+    // to the start of the annotation's NLA.
+    InstanceGraphNode *node = instanceGraph.lookup(moduleName);
+    while (true) {
+      // If we get to the owning module or the top, we're done.
+      if (node->getModule() == owningModule || node->noUses())
+        break;
+
+      // Append the next level of hierarchy to the path. Note that if there
+      // are multiple instances, which we warn about, this is where the
+      // ambiguity manifests. In practice, just picking usesBegin generates
+      // the same output as EmitOMIR would for now.
+      InstanceRecord *inst = *node->usesBegin();
+      path.push_back(
+          OpAnnoTarget(inst->getInstance<InstanceOp>())
+              .getNLAReference(namespaces[inst->getParent()->getModule()]));
+
+      node = inst->getParent();
     }
 
     // Create the HierPathOp.

@@ -17,10 +17,14 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/SymbolTable.h"
 
+#include "circt/Dialect/HW/HWOpInterfaces.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Sim/SimDialect.h"
+#include "circt/Dialect/Sim/SimTypes.h"
 #include "circt/Support/BuilderUtils.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 
 #define GET_OP_CLASSES
 #include "circt/Dialect/Sim/Sim.h.inc"
